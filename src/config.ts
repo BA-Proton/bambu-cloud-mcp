@@ -3,7 +3,7 @@ import * as path from "path";
 import * as os from "os";
 import type { AppConfig, PrinterConfig } from "./types.js";
 
-const CONFIG_DIR =
+export const CONFIG_DIR =
   process.env.BAMBU_MCP_CONFIG_DIR || path.join(os.homedir(), ".bambu-mcp");
 const CONFIG_FILE = path.join(CONFIG_DIR, "printers.json");
 

@@ -322,6 +322,16 @@ export interface PrintTask {
   weightGrams: number;
   status: PrintTaskStatus;
   statusCode: number;
+  /** MakerWorld model ID; 0 when the job was not started from MakerWorld. */
+  designId: number;
+  /** MakerWorld print profile ID; 0 when not from MakerWorld. */
+  instanceId: number;
+  /** MakerWorld print profile title. */
+  instanceTitle: string;
+  /** How the job was sent: "cloud_file", "auto_repeat", "cloud_slice". */
+  mode: string;
+  /** The complete task record as returned by the API. */
+  raw: Record<string, unknown>;
 }
 
 export interface ListPrintTasksOptions {
@@ -362,6 +372,11 @@ function toPrintTask(t: any): PrintTask {
     weightGrams: t.weight ?? 0,
     status,
     statusCode: code,
+    designId: Number(t.designId) || 0,
+    instanceId: Number(t.instanceId) || 0,
+    instanceTitle: (t.instanceTitle || "").trim(),
+    mode: t.mode || "",
+    raw: t,
   };
 }
 
@@ -376,8 +391,9 @@ export async function listPrintTasks(
   accessToken: string,
   region: string | undefined,
   opts: ListPrintTasksOptions,
-): Promise<{ tasks: PrintTask[]; total: number }> {
+): Promise<{ tasks: PrintTask[]; total: number; scanned: Record<string, unknown>[] }> {
   const tasks: PrintTask[] = [];
+  const scanned: Record<string, unknown>[] = [];
   let total = 0;
   for (let offset = 0; ; offset += TASK_PAGE_SIZE) {
     const query = new URLSearchParams({
@@ -393,16 +409,17 @@ export async function listPrintTasks(
     total = Number(data?.total) || 0;
     const hits: any[] = Array.isArray(data?.hits) ? data.hits : [];
     for (const hit of hits) {
+      scanned.push(hit);
       const task = toPrintTask(hit);
       if (opts.since && new Date(task.startTime) < opts.since) {
-        return { tasks, total };
+        return { tasks, total, scanned };
       }
       if (opts.status && task.status !== opts.status) continue;
       tasks.push(task);
-      if (tasks.length >= opts.max) return { tasks, total };
+      if (tasks.length >= opts.max) return { tasks, total, scanned };
     }
     if (hits.length < TASK_PAGE_SIZE || offset + hits.length >= total) {
-      return { tasks, total };
+      return { tasks, total, scanned };
     }
   }
 }

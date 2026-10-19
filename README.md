@@ -31,7 +31,7 @@ All 32 tools, grouped by area:
 |---|---|
 | `cloud_status` | Login status, account, region, token expiry, connected cloud printers |
 | `sync_cloud_printers` | Discover and connect printers bound to your account over the cloud |
-| `get_print_history` | Account print-job history (Bambu Studio's Print History), filterable by printer, result and start date |
+| `get_print_history` | Account print-job history (Bambu Studio's Print History), filterable by printer, result and start date. Links MakerWorld models, returns full API records with `format: "json"`, and archives every fetched record to `~/.bambu-mcp/print-history.json` |
 | `cloud_logout` | Clear stored cloud credentials and disconnect cloud printers |
 
 ### Printer management
@@ -239,6 +239,7 @@ src/
   mqtt-client.ts      Bambu MQTT protocol (status + all control commands)
   bambu-cloud.ts      Cloud API: login, email-code/2FA, device discovery, refresh, print history
   cloud-store.ts      ~/.bambu-mcp/cloud.json credential store
+  history-store.ts    ~/.bambu-mcp/print-history.json print-history archive (full API records)
   login-cli.ts        Interactive `npm run login`
   camera-client.ts    LAN chamber-image capture (TLS port 6000 → JPEG)
   camera-store.ts     ~/.bambu-mcp/cameras.json access-code store
@@ -246,7 +247,7 @@ src/
   tools/              One file per tool group
 ```
 
-All credentials stay **local** in `~/.bambu-mcp/` (`cloud.json`, `cameras.json`, `printers.json`), written `0600` and git-ignored. Nothing is sent anywhere except Bambu's own API and MQTT broker.
+All credentials stay **local** in `~/.bambu-mcp/` (`cloud.json`, `cameras.json`, `printers.json`; `print-history.json` holds the print-history archive), written `0600` and git-ignored. Nothing is sent anywhere except Bambu's own API and MQTT broker.
 
 ## Troubleshooting
 

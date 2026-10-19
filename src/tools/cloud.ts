@@ -18,6 +18,7 @@ import {
   type CloudDevice,
   type PrintTask,
 } from "../bambu-cloud.js";
+import { archiveTasks, getHistoryPath } from "../history-store.js";
 
 const HISTORY_DEFAULT_LIMIT = 50;
 const HISTORY_MAX_LIMIT = 1000;
@@ -42,6 +43,13 @@ function formatDuration(seconds?: number): string {
   return `${Math.round(seconds)}s`;
 }
 
+/** Markdown link to the MakerWorld model, or a dash when the job has none. */
+function formatMakerWorld(designId: number): string {
+  return designId
+    ? `[${designId}](https://makerworld.com/en/models/${designId})`
+    : "—";
+}
+
 /** Map a configured printer ID to its serial; throws with the valid IDs. */
 function serialForPrinterId(printerId: string): string {
   const printers = loadConfig().printers;
@@ -58,6 +66,7 @@ function formatHistory(
   tasks: PrintTask[],
   total: number,
   scope: string,
+  archived: number,
 ): string {
   if (tasks.length === 0) return "No print jobs match.";
 
@@ -87,18 +96,20 @@ function formatHistory(
 
   lines.push(
     "",
-    "| Started | Printer | Model | Plate | Actual time | Est. time | Est. weight | Result |",
-    "|---|---|---|---|---|---|---|---|",
+    "| Started | Printer | Model | MakerWorld | Plate | Actual time | Est. time | Est. weight | Result |",
+    "|---|---|---|---|---|---|---|---|---|",
   );
   for (const t of tasks) {
     lines.push(
-      `| ${formatUtc(t.startTime)} | ${t.printerName} | ${t.title.replace(/\|/g, "\\|")} | ${t.plate} | ${formatDuration(t.actualSeconds)} | ${formatDuration(t.estimatedSeconds)} | ${t.weightGrams.toFixed(1)} g | ${STATUS_LABELS[t.status]} |`,
+      `| ${formatUtc(t.startTime)} | ${t.printerName} | ${t.title.replace(/\|/g, "\\|")} | ${formatMakerWorld(t.designId)} | ${t.plate} | ${formatDuration(t.actualSeconds)} | ${formatDuration(t.estimatedSeconds)} | ${t.weightGrams.toFixed(1)} g | ${STATUS_LABELS[t.status]} |`,
     );
   }
 
   lines.push(
     "",
     "Actual time is end minus start for finished jobs (canceled jobs show time until cancel). Est. time and weight are slicer estimates. The cloud reports canceled and failed jobs with the same code. Use get_status for a printer's live state.",
+    "",
+    `Complete records (all API fields, including signed cover/plate-metadata links that expire 30–60 min after this fetch) archived to ${getHistoryPath()} (${archived} jobs). Use format "json" for the full records.`,
   );
   return lines.join("\n");
 }
@@ -276,7 +287,7 @@ export function registerCloudTools(
 
   server.tool(
     "get_print_history",
-    "Get print-job history from the Bambu cloud account (the same list as Bambu Studio's Print History page), newest first. Returns a per-printer summary and one row per job: start time, printer, model, plate, actual time (finished jobs), estimated time and filament, and result. Covers every printer bound to the account, including jobs started from Bambu Studio, Handy, or the printer screen. Requires cloud login. For a printer's current live state use get_status instead.",
+    "Get print-job history from the Bambu cloud account (the same list as Bambu Studio's Print History page), newest first. Returns a per-printer summary and one row per job: start time, printer, model, plate, actual time (finished jobs), estimated time and filament, and result. Covers every printer bound to the account, including jobs started from Bambu Studio, Handy, or the printer screen. Each job carries its MakerWorld model ID when it was started from MakerWorld (look it up with a MakerWorld tool for designer, license and remix origin). Every fetch also saves the complete API records, including signed cover-image and plate-metadata links, to a local archive. Use format 'json' to get every field. Requires cloud login. For a printer's current live state use get_status instead.",
     {
       printer: z
         .string()
@@ -306,8 +317,14 @@ export function registerCloudTools(
         .describe(
           `Maximum number of jobs to return (default ${HISTORY_DEFAULT_LIMIT}, max ${HISTORY_MAX_LIMIT}).`,
         ),
+      format: z
+        .enum(["table", "json"])
+        .default("table")
+        .describe(
+          "table (default): summary and one row per job. json: the complete API record for each job, including AMS filament mapping, nozzle, MakerWorld profile and signed asset links (large: ~5 KB per job).",
+        ),
     },
-    async ({ printer, status, since, limit }) => {
+    async ({ printer, status, since, limit, format }) => {
       const text = (t: string, isError = false) => ({
         content: [{ type: "text" as const, text: t }],
         isError,
@@ -317,7 +334,7 @@ export function registerCloudTools(
         return text("Not logged in to Bambu cloud. Run `npm run login`.", true);
       }
       try {
-        const { tasks, total } = await listPrintTasks(
+        const { tasks, total, scanned } = await listPrintTasks(
           creds.accessToken,
           creds.region,
           {
@@ -327,8 +344,14 @@ export function registerCloudTools(
             max: limit,
           },
         );
+        const archived = archiveTasks(scanned);
+        if (format === "json") {
+          return text(
+            JSON.stringify({ total, archive: getHistoryPath(), tasks: tasks.map((t) => t.raw) }, null, 2),
+          );
+        }
         return text(
-          formatHistory(tasks, total, printer ?? "the account"),
+          formatHistory(tasks, total, printer ?? "the account", archived),
         );
       } catch (e: any) {
         return text(`Could not fetch print history: ${e.message}`, true);

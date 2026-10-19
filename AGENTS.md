@@ -16,6 +16,7 @@ Repo-specific notes for AI coding agents working on **bambu-cloud-mcp**, an MCP 
 - `src/fleet-manager.ts` — per-printer connection manager; branches on LAN vs cloud `mode`.
 - `src/mqtt-client.ts` — the Bambu MQTT protocol (status + commands).
 - `src/bambu-cloud.ts` / `src/cloud-store.ts` — cloud login/API and `~/.bambu-mcp/cloud.json`.
+- `src/history-store.ts` — `~/.bambu-mcp/print-history.json`, the archive of full print-history records (upserted on every `get_print_history` call).
 - `src/camera-client.ts` — LAN-only chamber JPEG capture (TLS port 6000).
 
 ## Adding a tool
