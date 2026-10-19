@@ -6,7 +6,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-server-000000)](https://modelcontextprotocol.io)
 
-An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that lets an AI assistant — Claude Code, Claude Desktop, or any MCP client — monitor and drive Bambu Lab printers. It talks to printers over MQTT, either on your **LAN** or through the **Bambu cloud broker** (`us.mqtt.bambulab.com` / `cn.mqtt.bambulab.com`), so status and control work from anywhere without putting the printer into LAN-Only mode. It ships **31 tools** covering status, print control, temperatures, AMS/filament, files, and a live LAN chamber-camera snapshot.
+An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that lets an AI assistant — Claude Code, Claude Desktop, or any MCP client — monitor and drive Bambu Lab printers. It talks to printers over MQTT, either on your **LAN** or through the **Bambu cloud broker** (`us.mqtt.bambulab.com` / `cn.mqtt.bambulab.com`), so status and control work from anywhere without putting the printer into LAN-Only mode. It ships **32 tools** covering status, print control, temperatures, AMS/filament, files, and a live LAN chamber-camera snapshot.
 
 ## Why this over other Bambu MCP servers
 
@@ -24,13 +24,14 @@ Most community Bambu MCP servers only do **LAN** control, or **read-only** cloud
 
 ## Tools
 
-All 31 tools, grouped by area:
+All 32 tools, grouped by area:
 
 ### Cloud
 | Tool | Description |
 |---|---|
 | `cloud_status` | Login status, account, region, token expiry, connected cloud printers |
 | `sync_cloud_printers` | Discover and connect printers bound to your account over the cloud |
+| `get_print_history` | Account print-job history (Bambu Studio's Print History), filterable by printer, result and start date |
 | `cloud_logout` | Clear stored cloud credentials and disconnect cloud printers |
 
 ### Printer management
@@ -236,7 +237,7 @@ src/
   index.ts            MCP server entry; registers tools, auto-connects on startup
   fleet-manager.ts    Multi-printer connection manager (LAN + cloud branches)
   mqtt-client.ts      Bambu MQTT protocol (status + all control commands)
-  bambu-cloud.ts      Cloud API: login, email-code/2FA, device discovery, refresh
+  bambu-cloud.ts      Cloud API: login, email-code/2FA, device discovery, refresh, print history
   cloud-store.ts      ~/.bambu-mcp/cloud.json credential store
   login-cli.ts        Interactive `npm run login`
   camera-client.ts    LAN chamber-image capture (TLS port 6000 → JPEG)

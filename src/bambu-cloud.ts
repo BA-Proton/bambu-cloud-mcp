@@ -227,6 +227,27 @@ export async function refreshToken(
   return buildLoginResult(data);
 }
 
+/** Authenticated GET returning parsed JSON; `label` prefixes error messages. */
+async function getJson(
+  label: string,
+  url: string,
+  accessToken: string,
+): Promise<any> {
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { ...baseHeaders(), Authorization: `Bearer ${accessToken}` },
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`${label} HTTP ${res.status}: ${text.slice(0, 160)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${label} returned non-JSON response.`);
+  }
+}
+
 /**
  * Get the MQTT username ("u_<uid>") for an account by querying the profile API.
  * Authoritative fallback when the JWT doesn't carry a usable username claim.
@@ -235,23 +256,11 @@ export async function getAccountUsername(
   accessToken: string,
   region?: string,
 ): Promise<string> {
-  const res = await fetch(
+  const data = await getJson(
+    "profile lookup",
     `${apiHost(region)}/v1/design-user-service/my/preference`,
-    {
-      method: "GET",
-      headers: { ...baseHeaders(), Authorization: `Bearer ${accessToken}` },
-    },
+    accessToken,
   );
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`profile lookup HTTP ${res.status}: ${text.slice(0, 160)}`);
-  }
-  let data: any = null;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error("profile lookup returned non-JSON.");
-  }
   const uid = data?.uid ?? data?.userId ?? data?.user_id ?? data?.uidStr;
   if (uid == null || uid === "") {
     throw new Error(
@@ -266,20 +275,11 @@ export async function listDevices(
   accessToken: string,
   region?: string,
 ): Promise<CloudDevice[]> {
-  const res = await fetch(`${apiHost(region)}/v1/iot-service/api/user/bind`, {
-    method: "GET",
-    headers: { ...baseHeaders(), Authorization: `Bearer ${accessToken}` },
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`listDevices HTTP ${res.status}: ${text.slice(0, 160)}`);
-  }
-  let data: any = null;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error("listDevices returned non-JSON response.");
-  }
+  const data = await getJson(
+    "listDevices",
+    `${apiHost(region)}/v1/iot-service/api/user/bind`,
+    accessToken,
+  );
   const devices = Array.isArray(data?.devices) ? data.devices : [];
   return devices.map((d: any) => ({
     dev_id: d.dev_id,
@@ -288,4 +288,121 @@ export async function listDevices(
     model: d.dev_model_name || d.dev_product_name,
     productName: d.dev_product_name,
   }));
+}
+
+export type PrintTaskStatus = "success" | "failed" | "printing" | "unknown";
+
+/**
+ * Cloud task status codes, as interpreted by Bambu Studio's TaskManager.
+ * The API uses 3 for both canceled and failed jobs.
+ */
+const TASK_STATUS: Record<number, PrintTaskStatus> = {
+  1: "printing",
+  2: "success",
+  3: "failed",
+  4: "printing",
+};
+
+export interface PrintTask {
+  id: number;
+  serial: string;
+  printerName: string;
+  /** Model title from MakerWorld when available, else the job/file title. */
+  title: string;
+  plate: number;
+  /** ISO-8601 UTC. */
+  startTime: string;
+  /** ISO-8601 UTC. Unreliable while status is "printing". */
+  endTime?: string;
+  /** Slicer-estimated print time in seconds. */
+  estimatedSeconds: number;
+  /** Actual run time (end − start) in seconds; only set for finished jobs. */
+  actualSeconds?: number;
+  /** Slicer-estimated filament weight in grams. */
+  weightGrams: number;
+  status: PrintTaskStatus;
+  statusCode: number;
+}
+
+export interface ListPrintTasksOptions {
+  /** Restrict to one printer (serial number); filtered server-side. */
+  serial?: string;
+  /** Keep only tasks with this status; filtered client-side. */
+  status?: PrintTaskStatus;
+  /** Stop once this many matching tasks are collected. */
+  max: number;
+  /** Stop at tasks that started before this instant. */
+  since?: Date;
+}
+
+/** The API silently clamps page sizes above this to 20. */
+const TASK_PAGE_SIZE = 100;
+
+/** Seconds between two ISO timestamps, or undefined if either is missing/invalid. */
+function secondsBetween(start?: string, end?: string): number | undefined {
+  if (!start || !end) return undefined;
+  const seconds = (Date.parse(end) - Date.parse(start)) / 1000;
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+}
+
+function toPrintTask(t: any): PrintTask {
+  const code = Number(t.status);
+  const status = TASK_STATUS[code] ?? "unknown";
+  const finished = status === "success" || status === "failed";
+  return {
+    id: t.id,
+    serial: t.deviceId,
+    printerName: t.deviceName || t.deviceId,
+    title: (t.designTitle || t.title || "").trim(),
+    plate: t.plateIndex,
+    startTime: t.startTime,
+    endTime: t.endTime || undefined,
+    estimatedSeconds: t.costTime ?? 0,
+    actualSeconds: finished ? secondsBetween(t.startTime, t.endTime) : undefined,
+    weightGrams: t.weight ?? 0,
+    status,
+    statusCode: code,
+  };
+}
+
+/**
+ * Print-job history for the account, newest first.
+ *
+ * Uses `/v1/user-service/my/tasks`, the endpoint behind the Print History page
+ * in Bambu Studio / Handy. It is undocumented; field names follow the
+ * community reverse-engineering (OpenBambuAPI, ha-bambulab).
+ */
+export async function listPrintTasks(
+  accessToken: string,
+  region: string | undefined,
+  opts: ListPrintTasksOptions,
+): Promise<{ tasks: PrintTask[]; total: number }> {
+  const tasks: PrintTask[] = [];
+  let total = 0;
+  for (let offset = 0; ; offset += TASK_PAGE_SIZE) {
+    const query = new URLSearchParams({
+      limit: String(TASK_PAGE_SIZE),
+      offset: String(offset),
+    });
+    if (opts.serial) query.set("deviceId", opts.serial);
+    const data = await getJson(
+      "listPrintTasks",
+      `${apiHost(region)}/v1/user-service/my/tasks?${query}`,
+      accessToken,
+    );
+    total = Number(data?.total) || 0;
+    const hits: any[] = Array.isArray(data?.hits) ? data.hits : [];
+    for (const hit of hits) {
+      const task = toPrintTask(hit);
+      if (opts.since && new Date(task.startTime) < opts.since) {
+        return { tasks, total };
+      }
+      if (opts.status && task.status !== opts.status) continue;
+      tasks.push(task);
+      if (tasks.length >= opts.max) return { tasks, total };
+    }
+    if (hits.length < TASK_PAGE_SIZE || offset + hits.length >= total) {
+      return { tasks, total };
+    }
+  }
 }
