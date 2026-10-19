@@ -292,8 +292,12 @@ export async function listDevices(
 
 export type PrintTaskStatus = "success" | "failed" | "printing" | "unknown";
 
-/** Cloud task status codes. The API uses 3 for both canceled and failed jobs. */
+/**
+ * Cloud task status codes, as interpreted by Bambu Studio's TaskManager.
+ * The API uses 3 for both canceled and failed jobs.
+ */
 const TASK_STATUS: Record<number, PrintTaskStatus> = {
+  1: "printing",
   2: "success",
   3: "failed",
   4: "printing",
@@ -310,8 +314,10 @@ export interface PrintTask {
   startTime: string;
   /** ISO-8601 UTC. Unreliable while status is "printing". */
   endTime?: string;
-  /** Slicer-estimated print time in seconds, not the actual duration. */
+  /** Slicer-estimated print time in seconds. */
   estimatedSeconds: number;
+  /** Actual run time (end − start) in seconds; only set for finished jobs. */
+  actualSeconds?: number;
   /** Slicer-estimated filament weight in grams. */
   weightGrams: number;
   status: PrintTaskStatus;
@@ -332,8 +338,17 @@ export interface ListPrintTasksOptions {
 /** The API silently clamps page sizes above this to 20. */
 const TASK_PAGE_SIZE = 100;
 
+/** Seconds between two ISO timestamps, or undefined if either is missing/invalid. */
+function secondsBetween(start?: string, end?: string): number | undefined {
+  if (!start || !end) return undefined;
+  const seconds = (Date.parse(end) - Date.parse(start)) / 1000;
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+}
+
 function toPrintTask(t: any): PrintTask {
   const code = Number(t.status);
+  const status = TASK_STATUS[code] ?? "unknown";
+  const finished = status === "success" || status === "failed";
   return {
     id: t.id,
     serial: t.deviceId,
@@ -343,8 +358,9 @@ function toPrintTask(t: any): PrintTask {
     startTime: t.startTime,
     endTime: t.endTime || undefined,
     estimatedSeconds: t.costTime ?? 0,
+    actualSeconds: finished ? secondsBetween(t.startTime, t.endTime) : undefined,
     weightGrams: t.weight ?? 0,
-    status: TASK_STATUS[code] ?? "unknown",
+    status,
     statusCode: code,
   };
 }

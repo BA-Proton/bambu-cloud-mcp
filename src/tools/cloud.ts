@@ -34,8 +34,12 @@ function formatUtc(iso?: string): string {
   return iso ? `${iso.slice(0, 16).replace("T", " ")} UTC` : "—";
 }
 
-function formatHours(seconds: number): string {
-  return `${(seconds / 3600).toFixed(1)}h`;
+/** Bambu Studio style: hours to one decimal, else whole minutes, else seconds. */
+function formatDuration(seconds?: number): string {
+  if (seconds === undefined) return "—";
+  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)}h`;
+  if (seconds >= 60) return `${Math.floor(seconds / 60)}min`;
+  return `${Math.round(seconds)}s`;
 }
 
 /** Map a configured printer ID to its serial; throws with the valid IDs. */
@@ -83,18 +87,18 @@ function formatHistory(
 
   lines.push(
     "",
-    "| Started | Printer | Model | Plate | Est. time | Est. weight | Result |",
-    "|---|---|---|---|---|---|---|",
+    "| Started | Printer | Model | Plate | Actual time | Est. time | Est. weight | Result |",
+    "|---|---|---|---|---|---|---|---|",
   );
   for (const t of tasks) {
     lines.push(
-      `| ${formatUtc(t.startTime)} | ${t.printerName} | ${t.title.replace(/\|/g, "\\|")} | ${t.plate} | ${formatHours(t.estimatedSeconds)} | ${t.weightGrams.toFixed(1)} g | ${STATUS_LABELS[t.status]} |`,
+      `| ${formatUtc(t.startTime)} | ${t.printerName} | ${t.title.replace(/\|/g, "\\|")} | ${t.plate} | ${formatDuration(t.actualSeconds)} | ${formatDuration(t.estimatedSeconds)} | ${t.weightGrams.toFixed(1)} g | ${STATUS_LABELS[t.status]} |`,
     );
   }
 
   lines.push(
     "",
-    "Times and weights are slicer estimates. The cloud reports canceled and failed jobs with the same code. Use get_status for a printer's live state.",
+    "Actual time is end minus start for finished jobs (canceled jobs show time until cancel). Est. time and weight are slicer estimates. The cloud reports canceled and failed jobs with the same code. Use get_status for a printer's live state.",
   );
   return lines.join("\n");
 }
@@ -272,7 +276,7 @@ export function registerCloudTools(
 
   server.tool(
     "get_print_history",
-    "Get print-job history from the Bambu cloud account (the same list as Bambu Studio's Print History page), newest first. Returns a per-printer summary and one row per job: start time, printer, model, plate, estimated time and filament, and result. Covers every printer bound to the account, including jobs started from Bambu Studio, Handy, or the printer screen. Requires cloud login. For a printer's current live state use get_status instead.",
+    "Get print-job history from the Bambu cloud account (the same list as Bambu Studio's Print History page), newest first. Returns a per-printer summary and one row per job: start time, printer, model, plate, actual time (finished jobs), estimated time and filament, and result. Covers every printer bound to the account, including jobs started from Bambu Studio, Handy, or the printer screen. Requires cloud login. For a printer's current live state use get_status instead.",
     {
       printer: z
         .string()
