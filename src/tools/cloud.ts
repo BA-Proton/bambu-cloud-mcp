@@ -12,10 +12,92 @@ import {
 } from "../cloud-store.js";
 import {
   listDevices,
+  listPrintTasks,
   refreshToken,
   deriveTokenInfo,
   type CloudDevice,
+  type PrintTask,
 } from "../bambu-cloud.js";
+
+const HISTORY_DEFAULT_LIMIT = 50;
+const HISTORY_MAX_LIMIT = 1000;
+
+const STATUS_LABELS: Record<PrintTask["status"], string> = {
+  success: "Success",
+  failed: "Canceled/Failed",
+  printing: "Printing",
+  unknown: "Unknown",
+};
+
+/** "2026-10-18T22:40:49Z" → "2026-10-18 22:40 UTC". */
+function formatUtc(iso?: string): string {
+  return iso ? `${iso.slice(0, 16).replace("T", " ")} UTC` : "—";
+}
+
+function formatHours(seconds: number): string {
+  return `${(seconds / 3600).toFixed(1)}h`;
+}
+
+/** Map a configured printer ID to its serial; throws with the valid IDs. */
+function serialForPrinterId(printerId: string): string {
+  const printers = loadConfig().printers;
+  const match = printers.find((p) => p.id === printerId);
+  if (!match) {
+    throw new Error(
+      `Printer '${printerId}' not found. Available: ${printers.map((p) => p.id).join(", ") || "none"}`,
+    );
+  }
+  return match.serialNumber;
+}
+
+function formatHistory(
+  tasks: PrintTask[],
+  total: number,
+  scope: string,
+): string {
+  if (tasks.length === 0) return "No print jobs match.";
+
+  const byPrinter = new Map<string, Record<PrintTask["status"], number> & { grams: number }>();
+  for (const t of tasks) {
+    const row =
+      byPrinter.get(t.printerName) ??
+      { success: 0, failed: 0, printing: 0, unknown: 0, grams: 0 };
+    row[t.status] += 1;
+    if (t.status === "success") row.grams += t.weightGrams;
+    byPrinter.set(t.printerName, row);
+  }
+
+  const lines = [
+    "# Print History",
+    `Showing ${tasks.length} job(s), newest first. Total jobs for ${scope}: ${total}.`,
+    "",
+    "| Printer | Jobs | Success | Canceled/Failed | Printing | Filament (successful) |",
+    "|---|---|---|---|---|---|",
+  ];
+  for (const [name, r] of [...byPrinter].sort(([a], [b]) => a.localeCompare(b))) {
+    const jobs = r.success + r.failed + r.printing + r.unknown;
+    lines.push(
+      `| ${name} | ${jobs} | ${r.success} | ${r.failed} | ${r.printing} | ${Math.round(r.grams)} g |`,
+    );
+  }
+
+  lines.push(
+    "",
+    "| Started | Printer | Model | Plate | Est. time | Est. weight | Result |",
+    "|---|---|---|---|---|---|---|",
+  );
+  for (const t of tasks) {
+    lines.push(
+      `| ${formatUtc(t.startTime)} | ${t.printerName} | ${t.title.replace(/\|/g, "\\|")} | ${t.plate} | ${formatHours(t.estimatedSeconds)} | ${t.weightGrams.toFixed(1)} g | ${STATUS_LABELS[t.status]} |`,
+    );
+  }
+
+  lines.push(
+    "",
+    "Times and weights are slicer estimates. The cloud reports canceled and failed jobs with the same code. Use get_status for a printer's live state.",
+  );
+  return lines.join("\n");
+}
 
 /** Get a currently-valid access token, refreshing if expired. Returns null if not logged in. */
 async function validToken(): Promise<CloudCredentials | null> {
@@ -185,6 +267,68 @@ export function registerCloudTools(
       }
       lines.push("", "Use get_status, pause_print, etc. with these IDs (or 'all').");
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    },
+  );
+
+  server.tool(
+    "get_print_history",
+    "Get print-job history from the Bambu cloud account (the same list as Bambu Studio's Print History page), newest first. Returns a per-printer summary and one row per job: start time, printer, model, plate, estimated time and filament, and result. Covers every printer bound to the account, including jobs started from Bambu Studio, Handy, or the printer screen. Requires cloud login. For a printer's current live state use get_status instead.",
+    {
+      printer: z
+        .string()
+        .optional()
+        .describe(
+          "Printer ID to restrict the history to (e.g. 'cloud-01P00C540300990', from list_printers). Omit for all printers on the account.",
+        ),
+      status: z
+        .enum(["success", "failed", "printing"])
+        .optional()
+        .describe(
+          "Only return jobs with this result. 'failed' includes canceled jobs; the cloud does not distinguish them.",
+        ),
+      since: z
+        .string()
+        .refine((s) => !Number.isNaN(Date.parse(s)), "Must be an ISO date or date-time.")
+        .optional()
+        .describe(
+          "Only return jobs started at or after this ISO date/date-time (e.g. '2026-10-01'). Date-only values are UTC midnight.",
+        ),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(HISTORY_MAX_LIMIT)
+        .default(HISTORY_DEFAULT_LIMIT)
+        .describe(
+          `Maximum number of jobs to return (default ${HISTORY_DEFAULT_LIMIT}, max ${HISTORY_MAX_LIMIT}).`,
+        ),
+    },
+    async ({ printer, status, since, limit }) => {
+      const text = (t: string, isError = false) => ({
+        content: [{ type: "text" as const, text: t }],
+        isError,
+      });
+      const creds = await validToken();
+      if (!creds) {
+        return text("Not logged in to Bambu cloud. Run `npm run login`.", true);
+      }
+      try {
+        const { tasks, total } = await listPrintTasks(
+          creds.accessToken,
+          creds.region,
+          {
+            serial: printer ? serialForPrinterId(printer) : undefined,
+            status,
+            since: since ? new Date(since) : undefined,
+            max: limit,
+          },
+        );
+        return text(
+          formatHistory(tasks, total, printer ?? "the account"),
+        );
+      } catch (e: any) {
+        return text(`Could not fetch print history: ${e.message}`, true);
+      }
     },
   );
 
